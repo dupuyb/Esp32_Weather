@@ -1,18 +1,14 @@
 // #define DEBUG_FRAME
 #include "Frame.h"
-#include "DHT.h"
-
 #include <Wire.h>
-#include <Adafruit_BMP085.h> // A powerful but easy to use BMP085/BMP180 Library
-//#include <Adafruit_Sensor.h>
-//#include <Adafruit_BME280.h>
-
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 #include <time.h>
 #include "Jeedom.h"
 
-const char VERSION[] = "Ver:0.0.3";
+const char VERSION[] = "Ver:1.2.18"; // ! Since PoE the OTA update is not good this small power-supply.
 
-#define MAC_ADDR {0x30,0xAE,0xA4,0x90,0xFD,0xD9}
+#define MAC_ADDR {0x00,0x01,0x02,0x03,0x04,0x05}
 
 // Embbedded weather page
 const char HTTP_HEADWE[] PROGMEM = "<!DOCTYPE html><html><head><title>Station&nbsp;M&eacute;t&eacute;o</title></head><body bgcolor=#DEB887>";
@@ -32,12 +28,14 @@ const char HTTP_TBLRWN[] PROGMEM = "<tr> <td class=\"tg-lqy6\">%s</td><td class=
   #define DBXMLN(...)
 #endif
 
-// I2c for Bmp180 I2C addr 0x77
-#define pinSDA  22
-#define pinSCL  23
+// I2c for Bmp280 I2C addr 0x76
+#define HOMEALTITUDE 455 // ! must be adjusted with GPS
+#define OFFESTTMP -4.0 // Offset // ! A controler apres demontage regulateur 3.3V
+#define BMP280_I2CADDR 0x76
+#define pinSDA  23
+#define pinSCL  22
 bool BMP_is_OK = false;
-Adafruit_BMP085 bmp;
-//Adafruit_BME280 bmp;
+Adafruit_BME280 bmp;
 
 // Detection wind direction
 #define pinU1   34
@@ -52,28 +50,21 @@ const int pinWindDir[8] = {pinU1,pinU2,pinU3,pinU4,pinU5,pinU6,pinU7,pinU8};
 const String windDir[8] = {"N","NE","E","SE","S","SO","O","NO"};
 
 // Wind speed V(m/s) = r * ((2*PI)/60) * N(rpm) = K * N(rpm)
-// r = 12.180038 mm  --> K = 0.012180038 * 2.PI/60 --> V(m/s) = 0.00127549059670815 * N(rpm)
-// Wind spped V(km/h) = 3.6 * V(m/s)
 #define winRmm  50 // bucket center radius
-#define winK    (winRmm/1000)*(2*PI)/60
 #define pinU9   12
-#define pinU10  13
+// #define pinU10  13
 
 // Rain counter 1 liter in weather = 127.323954473516 more than 1mm on 1m2
 #define rainRadus 50 // mm collector radius
 #define rainCollector (PI*rainRadus*rainRadus)
 #define rainFactor 1000000/rainCollector //  One litre here is equal to 127.323954473516 liter/m2
-#define rainCalibration 60 // Average of number of flipflap for one liter here
+#define rainCalibration 380.0 // Average of number of flipflap for one liter
 #define pinU11   15
 #define pinU12   5
 
 // Serial command
 int8_t cmd;
 int8_t wifiLost = 0;
-
-// DHT22 pin 16
-#define pinDHT     16 // GPIO16
-DHT dht(pinDHT, DHT22);
 
 // Time facilities
 const long gmtOffset_sec     = 3600;
@@ -83,14 +74,15 @@ const char* ntpServer        = "pool.ntp.org";
 
 // Time HH:MM.ss
 String getTime() {
-  char temp[10];
+  static char temp[10];
   snprintf(temp, 20, "%02d:%02d:%02d", timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec );
   return String(temp);
 }
 
-// Date as europeen format
+// Date as europeen format 2019/11/25 23:58:00
+String rebootTime;
 String getDate(){
-  char temp[20];
+  static char temp[20];
   snprintf(temp, 20, "%02d/%02d/%04d %02d:%02d:%02d",
           timeinfo.tm_mday, (timeinfo.tm_mon+1), (1900+timeinfo.tm_year),  timeinfo.tm_hour,timeinfo.tm_min,timeinfo.tm_sec );
   return String(temp);
@@ -104,15 +96,27 @@ long previousMillis = 0;
 Jeedom jeedom("/cfJeedom.json");
 bool saveConfigJeedom = false;
 // Devices from virtual jeedom
-const int idTemp = 1984; // Temperature
-const int idBaro = 1984; // Pression barometric
-const int idHumi = 1984; // % humidity
-const int idWdir = 1984; // Wind direction
-const int idWmps = 1984; // Wind m/s
-const int idWkph = 1984; // Wind km/h
-const int idRmpm = 1984; // Rain mm/m2 or l/m2 last 5 minute
-const int idRint = 1984; // Rain intensity per minute
+const int idTemp = 1925; // Température
+const int idHumi = 1926; // % humidity
+const int idBaro = 1927; // Pression barometric
+const int idBars = 1935; // Pression barometric
+const int idAlti = 1936; // Altidute
+const int idWmps = 1937; // Wind m/s
+const int idWkph = 1938; // Wind km/h
+const int idRmpm = 1939; // Rain mm/m2/h 
+const int idRjou = 1940; // Rain intensity per jpour
+const int idWdir = 1941; // Wind direction
+
 bool onChanged = true;
+
+#define SEND2JEEDOM(na,wc,rj,id,va) { \
+   if (wc == WL_CONNECTED && rj == HTTP_CODE_OK) { \
+     rj = jeedom.sendVirtual(id, va); \
+     if (rj != HTTP_CODE_OK) { \
+       Serial.printf("%s %s Jeedom(id:%d) error (%s)  \n\r", getDate().c_str(), na, id, httpStatus(rj)); \
+      } \
+    } \
+  }
 
 // Force other host name and mac Addresses  // Set config or defaults
 void forceMac() {
@@ -144,131 +148,118 @@ String getRoseDesVents() {
   return windDir[getWindDirFirst()];
 }
 
-// Read wind speed WARNING magnet polarization inverted
-// Detect 1/2 turn
-unsigned long windspeed[2];
-void windSpeedIrq() {
-  if ( digitalRead(pinU9) == LOW && digitalRead(pinU10) == HIGH ) {
-    windspeed[0] = millis();
-  } else {
-    if ( digitalRead(pinU9) == HIGH && digitalRead(pinU10) == LOW ) {
-      windspeed[1] = millis();
-    }
-  }
+// Read wind speed  U10 is not installed (else double irq)
+unsigned long windCounter = 0;
+void IRAM_ATTR windSpeedIrq0() {
+  windCounter++;
 }
 void initWindSpeed() {
   pinMode(pinU9, INPUT_PULLUP);
-  pinMode(pinU10, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(pinU9), windSpeedIrq, FALLING);
-  attachInterrupt(digitalPinToInterrupt(pinU10), windSpeedIrq, FALLING);
+  attachInterrupt(digitalPinToInterrupt(pinU9), windSpeedIrq0, FALLING);
 }
-float windMeterPerSec = 0;
-bool getWindMeterPerSec() {
-  bool ret = false;
-  unsigned long ecartMs = abs(windspeed[1] - windspeed[0]) * 2;
-  float nbrRpm = 0; // rotation per minute
-  if (ecartMs != 0) nbrRpm = 60000.0 / (float)ecartMs;
-  if (nbrRpm * winK != windMeterPerSec) ret = true;
-  windMeterPerSec = nbrRpm * winK;
+char* getWindSensor() {
+  static char ret[15];
+  snprintf(ret, 15, "%d", digitalRead(pinU9)  );
   return ret;
 }
+float winNbrRpm_1 = 0;
+float windNrbRpm = 0; 
+bool getWindMeterPerSec() {
+  bool ret = false;
+  if (winNbrRpm_1 != windNrbRpm) ret=true;
+  winNbrRpm_1 = windNrbRpm;
+  return ret;
+}
+
+// Rain counter 1 liter in my device = 124.129164111519 more than 1mm for 1m2
+unsigned long rainFlipFlop = 0;
+void IRAM_ATTR rainCounterIrq0() {
+  rainFlipFlop++;
+} 
+void IRAM_ATTR rainCounterIrq1() {
+  rainFlipFlop++;
+}
+
+float windMeterPerSec = 0;
 float getWindKmPerHour() {
   return 3.6 * windMeterPerSec;
 }
 
-// Rain counter 1 liter in my device = 124.129164111519 more than 1mm for 1m2
-unsigned long raincounter[2];
-unsigned long rainFlipFlop = 0;
-float rainMmPerSquareMeterPerHour = 0;
-void rainCounterIrq() {
-  if ( digitalRead(pinU11) == LOW && digitalRead(pinU12) == HIGH ) { // Flip
-    raincounter[0] = millis();
-    rainFlipFlop++;
+unsigned long rainFlipFlop_1 = 0;
+unsigned long rainFlipFlop_j = 0;
+unsigned long windCounter_1 = 0;
+float rainNbrFFph;
+float rainIntensityMmxm2xh;
+void updateMeteo(){ // Call every minute
+  // Wind computed evey minute
+  windNrbRpm = (float)(windCounter - windCounter_1) / 2.0;
+  windCounter_1 = windCounter;
+  float winK = ((float)winRmm/1000.0)*(2.0*PI);
+  windMeterPerSec = windNrbRpm * winK;
+  // Rain computed evey minute
+  if ( timeinfo.tm_min==0 ) {
+    rainNbrFFph = (float)(rainFlipFlop - rainFlipFlop_1);
+    rainFlipFlop_1 = rainFlipFlop;
+    if (timeinfo.tm_hour==0)
+      rainFlipFlop_j = rainFlipFlop;
   } else {
-    if ( digitalRead(pinU11) == HIGH && digitalRead(pinU12) == LOW ) { // Flop
-      raincounter[1] = millis();
-      rainFlipFlop++;
-    }
+    float fact =  (60.0 / (float)timeinfo.tm_min);
+    rainNbrFFph = (float)(rainFlipFlop - rainFlipFlop_1) * fact;
   }
-  if (timeinfo.tm_hour==0 && timeinfo.tm_min==0 && timeinfo.tm_sec==0) {
-     rainMmPerSquareMeterPerHour = rainFlipFlop/rainCalibration;
-     rainFlipFlop = 0; //RESET every hour
-   }
+  rainIntensityMmxm2xh = (rainNbrFFph/rainCalibration * rainFactor);
+}
+
+ float rainIntensityMmxm2xj = 0;
+ bool getRainMmPerSquareMeter () {
+   bool ret = false;
+   float r = rainFlipFlop_j/rainCalibration * rainFactor;
+   if (rainIntensityMmxm2xj != r) ret = true;
+   rainIntensityMmxm2xj = r;
+   return ret;
+ }
+
+char* getRainSensor(){
+  static char ret[15];
+  snprintf(ret, 15, "%d%db", digitalRead(pinU11) , digitalRead(pinU12) );
+  return ret;
 }
 void initRainCounter() {
   pinMode(pinU11, INPUT_PULLUP);
   pinMode(pinU12, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(pinU11), rainCounterIrq, FALLING);
-  attachInterrupt(digitalPinToInterrupt(pinU12), rainCounterIrq, FALLING);
-}
-
-float rainMmPerSquareMeter = 0;
-bool getRainMmPerSquareMeter () {
-  bool ret = false;
-  float r = rainFlipFlop/rainCalibration;
-  if (rainMmPerSquareMeter != r) ret = true;
-  rainMmPerSquareMeter = r;
-  return ret;
-}
-// Rain instantly
-float getRainIntensityMmPerMinute() {
-  unsigned long ecartMs = abs(raincounter[1] - raincounter[0]);
-  float ffpm = 0; // flipFlop per minute
-  if (ecartMs != 0) ffpm = 60000.0 / (float)ecartMs;
-  return ffpm / rainCalibration;
-}
-
-// DHT22 ############################
-float humidityDHT = -1;
-float temperatureDHT = -1;
-bool getDHTHumidity(){
-  bool ret = false;
-  float h = dht.readHumidity();
-  if (isnan(h)) return ret;
-  if (humidityDHT != h) ret = true;
-  humidityDHT = h;
-  return ret;
-}
-bool getDHTTemperature(){
-  bool ret = false;
-  float t = dht.readTemperature();
-  if (isnan(t)) {
-    Serial.printf("%s DHT ERROR RET:%d \n\r", getDate().c_str(), ret);
-    return ret;
-  }
-  if (temperatureDHT != t) ret = true;
-  temperatureDHT = t;
-  return ret;
+  attachInterrupt(digitalPinToInterrupt(pinU11), rainCounterIrq0, FALLING);
+  attachInterrupt(digitalPinToInterrupt(pinU12), rainCounterIrq1, FALLING);
 }
 
 // BMP180 ######################################
 float temperatureBMP = -1;
 float pressureBMP = -1;
+float humidityBMP = -1;
 float pressureSeaBMP = -1;
-float altitudeBMP = -1;
-bool getBMP180() {
+bool getBMP280() {
   bool ret = false;
   if (BMP_is_OK) {
-    float t = bmp.readTemperature();
+    float t = bmp.readTemperature() + OFFESTTMP;
     if ( temperatureBMP != t) {
       ret = true;
       temperatureBMP = t;
     }
-    float p = bmp.readPressure();
+    float p = bmp.readPressure() / 100.0F;
     if (pressureBMP != p) {
       ret = true;
       pressureBMP = p;
     }
-    // bmp.readAltitude(101500) with pressure a sea level
-    float a = bmp.readAltitude();
-    if (altitudeBMP != a) {
+    float c = 0.0065*HOMEALTITUDE;
+    float a = 1.0-(c/(temperatureBMP+c+273.15));
+    float b = pressureBMP * pow(a,-5.257);
+    // bmp.readAltitude(SEALEVELPRESSURE_HPA);
+    if (pressureSeaBMP != b) {
       ret = true;
-      altitudeBMP = a;
+      pressureSeaBMP = b;
     }
-    float sp = bmp.readSealevelPressure();
-    if (pressureSeaBMP != sp) {
+    float sp = bmp.readHumidity();
+    if (humidityBMP != sp) {
       ret = true;
-      pressureSeaBMP = sp;
+      humidityBMP = sp;
     }
   }
   return ret;
@@ -277,12 +268,12 @@ bool getBMP180() {
 // Meteo HTML
 char* float2cptr(float f) {
   static char ret[15];
-  sprintf(ret, "%.2f", f);
+  snprintf(ret, 15, "%.2f", f);
   return ret;
 }
 char* long2cptr(unsigned long f) {
   static char ret[15];
-  sprintf(ret, "%lu", f);
+  snprintf(ret, 15, "%lu", f);
   return ret;
 }
 char* uint2cptr(uint8_t v) {
@@ -296,50 +287,61 @@ char* uint2cptr(uint8_t v) {
   return ret;
 }
 
-// Write meteo.html file into FS ###########################
-String meteoHtml() {
-  File file = SPIFFS.open("/meteo.html", FILE_WRITE);
-  if (!file)
-    return F("Can't write in meteo.html file.");
-  // Store meteo file
-  file.print( FPSTR(HTTP_HEADWE));
-  file.print( FPSTR(HTTP_STYLWE));
+// Sent meteo.html to client ###########################
+String sentHtmlMeteo() {
+  char fmt[256];
+  String msg = FPSTR(HTTP_HEADAL);
+  msg += FPSTR(HTTP_STYLWE);
   // Add message date & time
-  file.printf( FPSTR(HTTP_WEATHE), getDate().c_str());
+  snprintf(fmt, 255, (const char*)F(HTTP_WEATHE), getDate().c_str());
+  msg += fmt; 
   // table header
-  file.print( FPSTR(HTTP_TBL1WE));
-  // Capteur DHT22
-  file.printf( FPSTR(HTTP_TBLRWS), 2, "<b>DTH22</b>", "Temp&eacute;rature", float2cptr(temperatureDHT), "&deg;C", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "Humidit&eacute;", float2cptr(humidityDHT), "%", "");
+  msg += FPSTR(HTTP_TBL1WE);
   // Capteur BPM180
-  file.printf( FPSTR(HTTP_TBLRWS), 4, "<b>BPM180</b>", "Temp&eacute;rature", float2cptr(temperatureBMP), "&deg;C", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "Altitude", float2cptr(altitudeBMP), "m", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "Pression 1", float2cptr(pressureBMP), "hPa", "Altitude du capteur");
-  file.printf( FPSTR(HTTP_TBLRWN), "Pression 2", float2cptr(pressureSeaBMP), "hPa", "Niveau de la mer");
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 5, "<b>BPM280</b>", "Temp&eacute;rature", float2cptr(temperatureBMP), "&deg;C", "Degr&eacute; Celsius"); msg += fmt; 
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Humidit&eacute;", float2cptr(humidityBMP), "%", "");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureBMP), "hPa", "Pression atmosph&eacute;rique");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Altitude", float2cptr(HOMEALTITUDE), "m", "Detecteur");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureSeaBMP), "hPa", "Au niveau de la mer");msg += fmt;
   // Anémomètre
-  file.printf( FPSTR(HTTP_TBLRWS), 6, "<b>An&eacute;mom&egrave;tre</b>", "Vent", float2cptr(windMeterPerSec), "m/sec.", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "Vent", float2cptr(getWindKmPerHour()), "km/h", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "1/2 tour", long2cptr(windspeed[0]), "ms", "1/2 tour mesure interval en milli-secondes.");
-  file.printf( FPSTR(HTTP_TBLRWN), "1   tour", long2cptr(windspeed[1]), "ms", "    (50 jours max.) ");
-  file.printf( FPSTR(HTTP_TBLRWN), "Direction", uint2cptr(getWindDir()), "binaire", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "Girouette", getRoseDesVents().c_str(), "", "<pre>rose des vents\n    N\n NO /\\ NE\n O <  > E\n SO \\/ SE\n    S</pre>");
-
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 6, "<b>An&eacute;mom&egrave;tre</b>", "Vent", float2cptr(windMeterPerSec), "m.sec.", "");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Vent", float2cptr(getWindKmPerHour()), "km.h", "");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", float2cptr(windNrbRpm), "r.p.m", "Rotation par minute");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", long2cptr(windCounter), "pulses", "Nombre de tour total");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Direction", uint2cptr(getWindDir()), "binaire", "Bit(7...0): NO,O,SO,S,SE,E,NE,N");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Girouette", getRoseDesVents().c_str(), "", "<pre style=\"font-size: 10px\">rose des vents\n    N\n NO /\\ NE\n O <  > E\n SO \\/ SE\n    S</pre>");msg += fmt;
   // Pluviometre
-  file.printf( FPSTR(HTTP_TBLRWS), 6, "<b>Pluviom&egrave;tre</b>", "Pluie", float2cptr(rainMmPerSquareMeter), "mm/m<sup>2</sup>", "Rain instantly");
-  file.printf( FPSTR(HTTP_TBLRWN), "Pluie", float2cptr(getRainIntensityMmPerMinute()), "mm/60s", "millim&egrave;tre par minute");
-  file.printf( FPSTR(HTTP_TBLRWN), "Pluie", float2cptr(rainMmPerSquareMeterPerHour), "mm/m<sup>2</sup>/h", "Last hour");
-  file.printf( FPSTR(HTTP_TBLRWN), "FlipFlop", long2cptr(rainFlipFlop), "pulse", "Number of FlipFlop");
-  file.printf( FPSTR(HTTP_TBLRWN), "Godet 1", long2cptr(raincounter[0]), "ms", "Bascule godet 1");
-  file.printf( FPSTR(HTTP_TBLRWN), "Godet 2", long2cptr(raincounter[1]), "ms", "Bascule godet 2");
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 3, "<b>Pluviom&egrave;tre</b>", "Pluie", float2cptr(rainIntensityMmxm2xh), "mm.m<sup>2</sup>.h", "Simulation par minute");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pluie", float2cptr(rainIntensityMmxm2xj), "mm.m<sup>2</sup>.j", "Millim&egrave;tre par jour");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "FlipFlop", long2cptr(rainFlipFlop), "pulses", "Nombre de bascule");msg += fmt;
   // ESP32
-  file.printf( FPSTR(HTTP_TBLRWS), 3, "<b>ESP32</b>", "Taille heap", long2cptr(ESP.getFreeHeap()), "bytes", "");
-  file.printf( FPSTR(HTTP_TBLRWN), "MAC", WiFi.macAddress().c_str(), "", "MAC Adresse");
-  file.printf( FPSTR(HTTP_TBLRWN), "IP", WiFi.localIP().toString().c_str(), "IPV4", "IP adresse");
-
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 4, "<b>ESP32</b>", "Version", VERSION, "Reboot", rebootTime.c_str());msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "UTC", long2cptr(xTaskGetTickCountFromISR()), "ms", "50 jours max.");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "MAC", WiFi.macAddress().c_str(), "", "MAC Adresse");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "IP", WiFi.localIP().toString().c_str(), " FreeH:", long2cptr(ESP.getFreeHeap())); msg += fmt;
   // Fin fichier
-  file.print("</table></div></body></html>");
-  file.close();
-  return F("File meteo.html file has been saved.");
+  msg += ("</table></div></body></html>");
+  return msg;
+}
+
+void showMeteo() {
+  Serial.printf("%s WS windDir=%s winSpd=%s(c:%lu) RainS=%s(c:%lu) \n\r",  getDate().c_str(), uint2cptr(getWindDir()), getWindSensor(), windCounter, getRainSensor(), rainFlipFlop );
+  Serial.printf("Bmp temp = %f Celsius \n\r", temperatureBMP);
+  Serial.printf("Bmp Pres = %f hPa \n\r", pressureBMP);
+  Serial.printf("Bmp Humi = %f %% \n\r", humidityBMP);
+  Serial.printf("Bmp Alti = %d m \n\r", HOMEALTITUDE);
+  Serial.printf("Bmp Pre0 = %f hPa \n\r", pressureSeaBMP);
+  Serial.printf("Wind vit = %f m/s \n\r", windMeterPerSec);
+  Serial.printf("Wind vit = %f km/h \n\r", getWindKmPerHour());
+  Serial.printf("Wind cnt = %lu p \n\r", windCounter);
+  Serial.printf("Wind cn1 = %lu p \n\r", windCounter_1);
+  Serial.printf("Wind dir = %d  \n\r", getWindDirFirst());
+  Serial.printf("Wind dir = %s rose des vents \n\r", getRoseDesVents().c_str());
+  Serial.printf("Rain qua = %f mm.m2.h \n\r", rainIntensityMmxm2xh);
+  Serial.printf("Rain qua = %f mm.m2.j \n\r", rainIntensityMmxm2xj);
+  Serial.printf("Rain cnt = %lu p \n\r", rainFlipFlop);
+  Serial.printf("Rain cn1 = %lu p \n\r", rainFlipFlop_1);
+  Serial.printf("%s Opt Heap:%u ... \n\r", getDate().c_str(), ESP.getFreeHeap());
 }
 
 // Test webscoket
@@ -380,24 +382,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 	}
 }
 
-// received argument from Jeedom script via virutal
-String handleJeedom() {
-  String ret ="jeedom_ok";
-  String srvcmd = server.arg("cmd");
-  String srvval = server.arg("value");
-  if (srvcmd!="") {
-//    if (srvcmd=="update" ) { // Msg cmd=update
-//      if (srvval!="") jeedom.config.fluxReference = srvval.toFloat(); // SET
-//      else ret = String(jeedom.config.fluxReference); // No value tag value => GET
-//    }
-    // From jeedom ...
-    if (jeedom.isCcrChanged()) saveConfigJeedom = true;
-    if (cmd=='d' || cmd=='f')
-      Serial.printf("%s Jeedom srvcmd:%s srvval:%s \n\r",((srvval!="")?("Set"):("Get")), srvcmd.c_str(), srvval.c_str());
-  }
-  return ret;
-}
-
 // I2C csanning address
 void scanI2C() {
   Serial.printf("Start Scanning I2C Addresses pinSDA:%d pinSCL:%d\n\r",pinSDA,pinSCL);
@@ -409,7 +393,7 @@ void scanI2C() {
       if(i < 16) Serial.print('0');
       Serial.print(i,HEX);
       cnt++;
-      if (i == BMP085_I2CADDR) BMP_is_OK = true;
+      if (i == BMP280_I2CADDR) BMP_is_OK = true;
     }
     else Serial.print("..");
     Serial.print(' ');
@@ -421,20 +405,22 @@ void scanI2C() {
 }
 
 // WatchDog:  wdCounter is set to 0 otherwise after 15 minutes ESP is restarted
+/*
 uint32_t wdCounter = 0;
 void watchdog(void *pvParameter) {
   while (1) {
     vTaskDelay(5000/portTICK_RATE_MS);
     wdCounter++;
-    if (wdCounter > 180) ESP.restart(); // Restart after 5sec * 180 => 15min
+    if (wdCounter > 180) ESP.restart(); //! Restart after 5sec * 180 => 15min
   }
 }
+*/
 
 void setup() {
   Serial.begin(115200);
   Serial.print("Version:"); Serial.println(VERSION);
   // Start my WatchDog
-  xTaskCreate(&watchdog, "wd task", 2048, NULL, 5, NULL);
+  // xTaskCreate(&watchdog, "wd task", 2048, NULL, 5, NULL);
   // Set pin mode  I/O Directions
   pinMode(EspLedBlue, OUTPUT);     // Led is BLUE at statup
   digitalWrite(EspLedBlue, HIGH);  // After 5 seconds blinking indicate WiFI ids OK
@@ -442,8 +428,9 @@ void setup() {
   frame_setup();
   // Start jeedom_ok
   jeedom.setup();
-  server.on("/jeedom", [](){
-     server.send(HTTP_CODE_OK, "text/plain", handleJeedom());
+  // Append meteo html 
+  server.on("/meteo.html", [](){
+    server.send(HTTP_CODE_OK, "text/html", sentHtmlMeteo());
   });
 	// Init time
 	configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); //init and get the time
@@ -451,14 +438,15 @@ void setup() {
   // Start
   getLocalTime(&timeinfo);
   Serial.printf("%s  Running...\r\n", getDate().c_str());
-
+  rebootTime = getDate();
   // Wire i2c
   Wire.begin(pinSDA, pinSCL);
   scanI2C();
-  // Start Bmp180
-  bmp.begin();
-  // Start DHT22
-  dht.begin();
+  // Start Bmp280
+  if (BMP_is_OK)  bmp.begin(BMP280_I2CADDR);
+  // Set pin mode for Wind direction
+  for (int i=0; i<8; i++)
+    pinMode(pinWindDir[i], INPUT); 
   // Speed meter
   initWindSpeed();
   // Rain counter
@@ -466,43 +454,57 @@ void setup() {
 }
 
 // Main loop -----------------------------------------------------------------
+bool fbmp = false; bool fwind = false; bool frain = false;
 void loop() {
+
+  // Call frame loop
+  frame_loop();
+
+  // Get Serial commands
 	while (Serial.available() > 0) {
 	  uint8_t c = (uint8_t)Serial.read();
 	  if (c != 13 && c != 10 ) {
       cmd = c;
     } else {
       if (c==13) {
-        if (cmd=='h') { Serial.println(); Serial.println("- Help info: r=reboot i=myip d=debug f=force m=MAC j=jeedom");}
+        if (cmd=='h') { Serial.println(); Serial.println("- Help info:\n\r r=reboot i=myip d=debug m=MAC s=ScanI2C p=pause v=verbose");}
 			  else if (cmd=='r') { ESP.restart(); }
-        else if (cmd=='i') { Serial.printf("Heap:%u IP:%s \n\r",ESP.getFreeHeap(), WiFi.localIP().toString().c_str() ); }
+        else if (cmd=='i') { Serial.printf("Heap:%u IP:%s MAC:%s \n\r",ESP.getFreeHeap(), WiFi.localIP().toString().c_str() , WiFi.macAddress().c_str()); }
         else if (cmd=='d') { Serial.println("Mode debug active."); }
-        else if (cmd=='f') { Serial.println("Mode force active."); }
         else if (cmd=='m') { Serial.println("Mode config feilds (Mac, Host,...)."); forceMac(); }
+        else if (cmd=='s') { Serial.println("Mode scanning I2C."); scanI2C(); }
+        else if (cmd=='p') { Serial.println("Mode Pause"); }
         else if (cmd=='j') { Serial.println("Mode jeeDom active."); }
+        else if (cmd=='v') { showMeteo(); cmd = ' ';}
         else { Serial.printf("Stop serial: %s \n\r",VERSION); }
       }
 		}
   }
 
-  // Call frame loop
-  frame_loop();
+  if ( cmd =='p' || cmd == 'P') {
+    if (cmd == 'p' ) Serial.println("MODE PAUSE.");
+    cmd='P';
+    return;
+  }
 
   // Is alive executed every 1 sec.
   if ( millis() - previousMillis > 1000L) {
     previousMillis = millis();
 		getLocalTime(&timeinfo);
     digitalWrite(EspLedBlue, !digitalRead(EspLedBlue));
-    int  retJeedom = 0;
+    int jeedomStatus = HTTP_CODE_OK;
+    int wifiStatus = WL_CONNECTED;
 
     if ( cmd=='d' ) {
-      Serial.printf("%s ... Weather Station wdCounter=%d \n\r",  getDate().c_str(),  wdCounter );
+      Serial.printf("%s WS windDir=%s winSpd=%s(c:%lu) RainS=%s(c:%lu) \n\r", 
+       getDate().c_str(), uint2cptr(getWindDir()), getWindSensor(), windCounter, getRainSensor(), rainFlipFlop );
     }
 
-    // DHT read every 120 seconds
+    // Read every 120 seconds
 		if ( (timeinfo.tm_min % 2==0) && timeinfo.tm_sec == 30) {
       // if wifi is down, try reconnecting every 60 seconds
-      if ((WiFi.status() != WL_CONNECTED) ) {
+      wifiStatus = WiFi.status();
+      if ((wifiStatus != WL_CONNECTED) ) {
         wifiLost++;
         if (wifiLost == 2 ) {
           Serial.printf("%s WiFi connection is lost. cnt:%d jeeErrCnt:%d\n\r",getDate().c_str(), wifiLost, jeedom.getErrorCounter());
@@ -522,72 +524,30 @@ void loop() {
       }
 	  }
 
-    // Every 5 minutes record T and H
-    if ( ((timeinfo.tm_min % 5==0) && (timeinfo.tm_sec == 0)) || cmd=='f' ) {
-      Serial.printf("%s - Every 5mm (cmd:%c)...", getDate().c_str(), cmd);
-      wdCounter = 0; // Reset WD
-      if (getDHTTemperature()) {
-        Serial.print("temperatureDHT = ");
-        Serial.print(temperatureDHT);
-        Serial.println(" Celsius");
-      }
-      if(getDHTHumidity()) {
-        Serial.print("humidityDHT = ");
-        Serial.print(humidityDHT);
-        Serial.println(" %");
-      }
-      if (getBMP180()) {
-        Serial.print("temperatureBMP = ");
-        Serial.print(temperatureBMP);
-        Serial.println(" Celsius");
+    // Every 1 minutes reading sensors 
+    if ( ((timeinfo.tm_min % 1==0) && (timeinfo.tm_sec == 0)) ) {
+      // wdCounter = 0; // Reset WD
+      fbmp = getBMP280();
+      fwind = getWindMeterPerSec();
+      frain = getRainMmPerSquareMeter();
+      updateMeteo();
 
-        Serial.print("PressureBMP = ");
-        Serial.print(pressureBMP);
-        Serial.println(" Pascal");
+      // Send meteo to Jeedom
+      if (fbmp || fwind || frain) {
+        SEND2JEEDOM("Temperatuure", wifiStatus, jeedomStatus, idTemp, temperatureBMP);
+        SEND2JEEDOM("Humidity", wifiStatus, jeedomStatus, idHumi, humidityBMP);
+        SEND2JEEDOM("Pression", wifiStatus, jeedomStatus, idBaro, pressureBMP);
+        SEND2JEEDOM("PressionSea", wifiStatus, jeedomStatus, idBars, pressureSeaBMP);
+        SEND2JEEDOM("Altidute", wifiStatus, jeedomStatus, idAlti, HOMEALTITUDE);
+     
+        SEND2JEEDOM("Windms", wifiStatus, jeedomStatus, idWmps, windMeterPerSec);
+        SEND2JEEDOM("Windkmh", wifiStatus, jeedomStatus, idWkph, getWindKmPerHour());
+        SEND2JEEDOM("Winddir", wifiStatus, jeedomStatus, idWdir, getWindDirFirst());
+ 
+        SEND2JEEDOM("Rainmmm2", wifiStatus, jeedomStatus, idRmpm, rainIntensityMmxm2xh);
+        SEND2JEEDOM("Rainxjour", wifiStatus, jeedomStatus, idRjou, rainIntensityMmxm2xj);
       }
-
-      if (getWindMeterPerSec()) {
-          Serial.print("Wind = ");
-          Serial.print(windMeterPerSec);
-          Serial.println(" m/s");
-          Serial.print("Wind = ");
-          Serial.print(getWindKmPerHour());
-          Serial.println(" km/h");
-          Serial.print("Wind = ");
-          Serial.print(getWindDirFirst());
-          Serial.println(" ");
-          Serial.print("Wind = ");
-          Serial.print(getRoseDesVents());
-          Serial.println(" ");
-      }
-      if (getRainMmPerSquareMeter()) {
-        Serial.print("Rain = ");
-        Serial.print(rainMmPerSquareMeter);
-        Serial.println(" mm/m2");
-        Serial.print("Rain = ");
-        Serial.print(getRainIntensityMmPerMinute());
-        Serial.println(" mm/minut");
-      }
-
-      if (cmd=='d' || cmd =='j' || cmd =='i') {
-        Serial.printf("%s Opt Heap:%u ... \n\r",getDate().c_str(), ESP.getFreeHeap());
-      }
-      if ( (retJeedom > 0) && (retJeedom != HTTP_CODE_OK) ) {
-        saveConfigJeedom = true;
-      }
-      // Save meteo html.
-      String msg = meteoHtml();
-      if (cmd=='d')
-        Serial.printf("%s ret=%s \n\r", getDate().c_str(), msg.c_str());
-    } // end 5 m
-
-    // Optional action
-    if (saveConfigJeedom ) {
-      boolean scjd = jeedom.saveConfigurationJeedom();
-      saveConfigJeedom = false;
-      if ( (cmd=='d') && scjd) Serial.printf("%s Configuration Jeedom file has been saved. \n\r", getDate().c_str());
-    }
-
+    } // end 1 m
 
   } // End second
 }
