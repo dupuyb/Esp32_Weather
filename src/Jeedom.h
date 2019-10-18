@@ -75,6 +75,7 @@ public:
     url += url + "&value="; url += String(temp);
     http.begin(config.host,config.port, url);
     int httpCode = http.GET();
+    
     if (httpCode!=HTTP_CODE_OK) jeeComErr++;
     else jeeComErr = 0;
     http.end();

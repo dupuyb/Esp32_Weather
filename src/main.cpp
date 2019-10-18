@@ -6,7 +6,7 @@
 #include <time.h>
 #include "Jeedom.h"
 
-const char VERSION[] = "Ver:1.2.18"; // ! Since PoE the OTA update is not good this small power-supply.
+const char VERSION[] = "Ver:1.2.20"; // ! Since PoE the OTA update is not good this small power-supply.
 
 #define MAC_ADDR {0x00,0x01,0x02,0x03,0x04,0x05}
 
@@ -20,11 +20,14 @@ const char HTTP_TBLRWS[] PROGMEM = "<tr> <td class=\"tg-0lax\" rowspan=\"%d\">%s
 const char HTTP_TBLRWN[] PROGMEM = "<tr> <td class=\"tg-lqy6\">%s</td><td class=\"tg-lqy6\">%s</td><td class=\"tg-0lax\">%s</td><td class=\"tg-0lax\">%s</td></tr>";
 
 // Debug macro
+// #define DEBUG_MAIN 
 #ifdef DEBUG_MAIN
-  #define DBXM(...) Serdial.print(__VA_ARGS__)
+  #define DBXM(...) Serial.print(__VA_ARGS__)
+  #define DBXMF(...) Serial.printf(__VA_ARGS__)
   #define DBXMLN(...) Serial.println(__VA_ARGS__)
 #else
   #define DBXM(...)
+  #define DBXMF(...)
   #define DBXMLN(...)
 #endif
 
@@ -129,7 +132,7 @@ void forceMac() {
   strlcpy(config.LoginPassword, "admin",sizeof(config.LoginPassword));
   config.UseToolsLocal = true;
   String ret = saveConfiguration(filename, config);
-  Serial.println(ret);
+  DBXMLN(ret);
 }
 
 // Read wind Direction 11110111 SUD
@@ -185,34 +188,38 @@ float getWindKmPerHour() {
   return 3.6 * windMeterPerSec;
 }
 
-unsigned long rainFlipFlop_1 = 0;
-unsigned long rainFlipFlop_j = 0;
-unsigned long windCounter_1 = 0;
+unsigned long rainFlipFlop_xxHxo = 0;
+unsigned long rainFlipFlop_ooHoo = 0;
+unsigned long rainFlipFlop_day = 0;
+unsigned long windCounter_xxHxo = 0;
 float rainNbrFFph;
 float rainIntensityMmxm2xh;
 void updateMeteo(){ // Call every minute
   // Wind computed evey minute
-  windNrbRpm = (float)(windCounter - windCounter_1) / 2.0;
-  windCounter_1 = windCounter;
+  windNrbRpm = (float)(windCounter - windCounter_xxHxo) / 2.0;
+  windCounter_xxHxo = windCounter;
   float winK = ((float)winRmm/1000.0)*(2.0*PI);
   windMeterPerSec = windNrbRpm * winK;
   // Rain computed evey minute
-  if ( timeinfo.tm_min==0 ) {
-    rainNbrFFph = (float)(rainFlipFlop - rainFlipFlop_1);
-    rainFlipFlop_1 = rainFlipFlop;
-    if (timeinfo.tm_hour==0)
-      rainFlipFlop_j = rainFlipFlop;
-  } else {
+  if ( timeinfo.tm_min==0 ) { // Every Hour at xxHxo
+    rainNbrFFph = (float)(rainFlipFlop - rainFlipFlop_xxHxo);
+    rainFlipFlop_xxHxo = rainFlipFlop;
+    if (timeinfo.tm_hour==0) { // Every Day at ooHoo
+      rainFlipFlop_day = rainFlipFlop - rainFlipFlop_ooHoo;
+      rainFlipFlop_ooHoo = rainFlipFlop;
+    }
+  } else { // Every minute
     float fact =  (60.0 / (float)timeinfo.tm_min);
-    rainNbrFFph = (float)(rainFlipFlop - rainFlipFlop_1) * fact;
+    rainNbrFFph = (float)(rainFlipFlop - rainFlipFlop_xxHxo) * fact;
   }
+  // Granularity = 1 / 380 *  127.323954473516 = 0.335 l.m2.h
   rainIntensityMmxm2xh = (rainNbrFFph/rainCalibration * rainFactor);
 }
 
  float rainIntensityMmxm2xj = 0;
  bool getRainMmPerSquareMeter () {
    bool ret = false;
-   float r = rainFlipFlop_j/rainCalibration * rainFactor;
+   float r = rainFlipFlop_day/rainCalibration * rainFactor;
    if (rainIntensityMmxm2xj != r) ret = true;
    rainIntensityMmxm2xj = r;
    return ret;
@@ -334,13 +341,13 @@ void showMeteo() {
   Serial.printf("Wind vit = %f m/s \n\r", windMeterPerSec);
   Serial.printf("Wind vit = %f km/h \n\r", getWindKmPerHour());
   Serial.printf("Wind cnt = %lu p \n\r", windCounter);
-  Serial.printf("Wind cn1 = %lu p \n\r", windCounter_1);
+  Serial.printf("Wind cn1 = %lu p \n\r", windCounter_xxHxo);
   Serial.printf("Wind dir = %d  \n\r", getWindDirFirst());
   Serial.printf("Wind dir = %s rose des vents \n\r", getRoseDesVents().c_str());
   Serial.printf("Rain qua = %f mm.m2.h \n\r", rainIntensityMmxm2xh);
   Serial.printf("Rain qua = %f mm.m2.j \n\r", rainIntensityMmxm2xj);
   Serial.printf("Rain cnt = %lu p \n\r", rainFlipFlop);
-  Serial.printf("Rain cn1 = %lu p \n\r", rainFlipFlop_1);
+  Serial.printf("Rain cn1 = %lu p \n\r", rainFlipFlop_xxHxo);
   Serial.printf("%s Opt Heap:%u ... \n\r", getDate().c_str(), ESP.getFreeHeap());
 }
 
@@ -384,43 +391,29 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 
 // I2C csanning address
 void scanI2C() {
-  Serial.printf("Start Scanning I2C Addresses pinSDA:%d pinSCL:%d\n\r",pinSDA,pinSCL);
+  DBXMF("Start Scanning I2C Addresses pinSDA:%d pinSCL:%d\n\r",pinSDA,pinSCL);
   uint8_t cnt=0;
   for(uint8_t i=0;i<128;i++){
     Wire.beginTransmission(i);
     uint8_t ec = Wire.endTransmission(true);
     if(ec == 0){
-      if(i < 16) Serial.print('0');
-      Serial.print(i,HEX);
+      if(i < 16) DBXM('0');
+      DBXM(i,HEX);
       cnt++;
       if (i == BMP280_I2CADDR) BMP_is_OK = true;
     }
-    else Serial.print("..");
-    Serial.print(' ');
-    if ((i&0x0f) == 0x0f) Serial.println();
+    else DBXM("..");
+    DBXM(' ');
+    if ((i&0x0f) == 0x0f) DBXLN();
   }
-  Serial.print("Scan Completed, ");
-  Serial.print(cnt);
-  Serial.println(" I2C Devices found.");
+  DBXM("Scan Completed, ");
+  DBXM(cnt);
+  DBXMLN(" I2C Devices found.");
 }
-
-// WatchDog:  wdCounter is set to 0 otherwise after 15 minutes ESP is restarted
-/*
-uint32_t wdCounter = 0;
-void watchdog(void *pvParameter) {
-  while (1) {
-    vTaskDelay(5000/portTICK_RATE_MS);
-    wdCounter++;
-    if (wdCounter > 180) ESP.restart(); //! Restart after 5sec * 180 => 15min
-  }
-}
-*/
 
 void setup() {
   Serial.begin(115200);
   Serial.print("Version:"); Serial.println(VERSION);
-  // Start my WatchDog
-  // xTaskCreate(&watchdog, "wd task", 2048, NULL, 5, NULL);
   // Set pin mode  I/O Directions
   pinMode(EspLedBlue, OUTPUT);     // Led is BLUE at statup
   digitalWrite(EspLedBlue, HIGH);  // After 5 seconds blinking indicate WiFI ids OK
@@ -525,7 +518,7 @@ void loop() {
 	  }
 
     // Every 1 minutes reading sensors 
-    if ( ((timeinfo.tm_min % 1==0) && (timeinfo.tm_sec == 0)) ) {
+    if ( ((timeinfo.tm_min%1==0) && (timeinfo.tm_sec==0)) ) {
       // wdCounter = 0; // Reset WD
       fbmp = getBMP280();
       fwind = getWindMeterPerSec();
@@ -548,6 +541,5 @@ void loop() {
         SEND2JEEDOM("Rainxjour", wifiStatus, jeedomStatus, idRjou, rainIntensityMmxm2xj);
       }
     } // end 1 m
-
   } // End second
 }
