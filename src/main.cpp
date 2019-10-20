@@ -6,7 +6,7 @@
 #include <time.h>
 #include "Jeedom.h"
 
-const char VERSION[] = "Ver:1.2.20"; // ! Since PoE the OTA update is not good this small power-supply.
+const char VERSION[] = "Ver:1.2.21"; 
 
 #define MAC_ADDR {0x00,0x01,0x02,0x03,0x04,0x05}
 
@@ -19,9 +19,10 @@ const char HTTP_TBL1WE[] PROGMEM = "<table class=\"tg\"><tr><th class=\"tg-amwm\
 const char HTTP_TBLRWS[] PROGMEM = "<tr> <td class=\"tg-0lax\" rowspan=\"%d\">%s</td><td class=\"tg-lqy6\">%s</td><td class=\"tg-lqy6\">%s</td><td class=\"tg-0lax\">%s</td><td class=\"tg-0lax\">%s</td></tr>";
 const char HTTP_TBLRWN[] PROGMEM = "<tr> <td class=\"tg-lqy6\">%s</td><td class=\"tg-lqy6\">%s</td><td class=\"tg-0lax\">%s</td><td class=\"tg-0lax\">%s</td></tr>";
 
-// Debug macro
-// #define DEBUG_MAIN 
-#ifdef DEBUG_MAIN
+// Debug macro on long USb wire we have Error: “Brownout detector was triggered” s
+// so normal working is without Uart on USB   
+// #define DEBUG_WEATHER
+#ifdef DEBUG_WEATHER
   #define DBXM(...) Serial.print(__VA_ARGS__)
   #define DBXMF(...) Serial.printf(__VA_ARGS__)
   #define DBXMLN(...) Serial.println(__VA_ARGS__)
@@ -32,8 +33,8 @@ const char HTTP_TBLRWN[] PROGMEM = "<tr> <td class=\"tg-lqy6\">%s</td><td class=
 #endif
 
 // I2c for Bmp280 I2C addr 0x76
-#define HOMEALTITUDE 455 // ! must be adjusted with GPS
-#define OFFESTTMP -4.0 // Offset // ! A controler apres demontage regulateur 3.3V
+#define HOMEALTITUDE 455 //! must be adjusted with GPS
+#define OFFESTTMP -4.0 //! Offset for temerature despite removale of the 3.3V regulator
 #define BMP280_I2CADDR 0x76
 #define pinSDA  23
 #define pinSCL  22
@@ -55,7 +56,7 @@ const String windDir[8] = {"N","NE","E","SE","S","SO","O","NO"};
 // Wind speed V(m/s) = r * ((2*PI)/60) * N(rpm) = K * N(rpm)
 #define winRmm  50 // bucket center radius
 #define pinU9   12
-// #define pinU10  13
+//! #define pinU10  13  not cabling
 
 // Rain counter 1 liter in weather = 127.323954473516 more than 1mm on 1m2
 #define rainRadus 50 // mm collector radius
@@ -116,7 +117,7 @@ bool onChanged = true;
    if (wc == WL_CONNECTED && rj == HTTP_CODE_OK) { \
      rj = jeedom.sendVirtual(id, va); \
      if (rj != HTTP_CODE_OK) { \
-       Serial.printf("%s %s Jeedom(id:%d) error (%s)  \n\r", getDate().c_str(), na, id, httpStatus(rj)); \
+       DBXMF("%s %s Jeedom(id:%d) error (%s)  \n\r", getDate().c_str(), na, id, httpStatus(rj)); \
       } \
     } \
   }
@@ -192,9 +193,9 @@ unsigned long rainFlipFlop_xxHxo = 0;
 unsigned long rainFlipFlop_ooHoo = 0;
 unsigned long rainFlipFlop_day = 0;
 unsigned long windCounter_xxHxo = 0;
-float rainNbrFFph;
 float rainIntensityMmxm2xh;
 void updateMeteo(){ // Call every minute
+  float rainNbrFFph;
   // Wind computed evey minute
   windNrbRpm = (float)(windCounter - windCounter_xxHxo) / 2.0;
   windCounter_xxHxo = windCounter;
@@ -294,6 +295,16 @@ char* uint2cptr(uint8_t v) {
   return ret;
 }
 
+char* getDebug(){
+  static char ret[15];
+#ifdef DEBUG_WEATHER
+  snprintf(ret, 15, "USB Uart:ON" );
+#else
+  snprintf(ret, 15, "USB Uart:OFF" );
+#endif
+  return ret;
+}
+
 // Sent meteo.html to client ###########################
 String sentHtmlMeteo() {
   char fmt[256];
@@ -323,7 +334,7 @@ String sentHtmlMeteo() {
   snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "FlipFlop", long2cptr(rainFlipFlop), "pulses", "Nombre de bascule");msg += fmt;
   // ESP32
   snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 4, "<b>ESP32</b>", "Version", VERSION, "Reboot", rebootTime.c_str());msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "UTC", long2cptr(xTaskGetTickCountFromISR()), "ms", "50 jours max.");msg += fmt;
+  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "UTC", long2cptr(xTaskGetTickCountFromISR()), "ms", getDebug());msg += fmt;
   snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "MAC", WiFi.macAddress().c_str(), "", "MAC Adresse");msg += fmt;
   snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "IP", WiFi.localIP().toString().c_str(), " FreeH:", long2cptr(ESP.getFreeHeap())); msg += fmt;
   // Fin fichier
@@ -331,6 +342,7 @@ String sentHtmlMeteo() {
   return msg;
 }
 
+#ifdef DEBUG_WEATHER
 void showMeteo() {
   Serial.printf("%s WS windDir=%s winSpd=%s(c:%lu) RainS=%s(c:%lu) \n\r",  getDate().c_str(), uint2cptr(getWindDir()), getWindSensor(), windCounter, getRainSensor(), rainFlipFlop );
   Serial.printf("Bmp temp = %f Celsius \n\r", temperatureBMP);
@@ -350,6 +362,7 @@ void showMeteo() {
   Serial.printf("Rain cn1 = %lu p \n\r", rainFlipFlop_xxHxo);
   Serial.printf("%s Opt Heap:%u ... \n\r", getDate().c_str(), ESP.getFreeHeap());
 }
+#endif
 
 // Test webscoket
 uint32_t value;
@@ -412,8 +425,10 @@ void scanI2C() {
 }
 
 void setup() {
+#ifdef DEBUG_WEATHER
   Serial.begin(115200);
   Serial.print("Version:"); Serial.println(VERSION);
+#endif
   // Set pin mode  I/O Directions
   pinMode(EspLedBlue, OUTPUT);     // Led is BLUE at statup
   digitalWrite(EspLedBlue, HIGH);  // After 5 seconds blinking indicate WiFI ids OK
@@ -430,7 +445,7 @@ void setup() {
   wifiLost = 0;
   // Start
   getLocalTime(&timeinfo);
-  Serial.printf("%s  Running...\r\n", getDate().c_str());
+  DBXMF("%s  Running...\r\n", getDate().c_str());
   rebootTime = getDate();
   // Wire i2c
   Wire.begin(pinSDA, pinSCL);
@@ -453,6 +468,7 @@ void loop() {
   // Call frame loop
   frame_loop();
 
+#ifdef DEBUG_WEATHER
   // Get Serial commands
 	while (Serial.available() > 0) {
 	  uint8_t c = (uint8_t)Serial.read();
@@ -460,14 +476,14 @@ void loop() {
       cmd = c;
     } else {
       if (c==13) {
-        if (cmd=='h') { Serial.println(); Serial.println("- Help info:\n\r r=reboot i=myip d=debug m=MAC s=ScanI2C p=pause v=verbose");}
+        if (cmd=='h') { Serial.println(); Serial.println("- Help info:\n\r r=reboot i=myip d=debug m=MAC s=saveConfig S=ScanI2C p=pause v=verbose");}
 			  else if (cmd=='r') { ESP.restart(); }
         else if (cmd=='i') { Serial.printf("Heap:%u IP:%s MAC:%s \n\r",ESP.getFreeHeap(), WiFi.localIP().toString().c_str() , WiFi.macAddress().c_str()); }
         else if (cmd=='d') { Serial.println("Mode debug active."); }
-        else if (cmd=='m') { Serial.println("Mode config feilds (Mac, Host,...)."); forceMac(); }
-        else if (cmd=='s') { Serial.println("Mode scanning I2C."); scanI2C(); }
+        else if (cmd=='m') { Serial.println("Mode config feilds (Mac, Host,...)."); forceMac(); cmd=' ';}
+        else if (cmd=='S') { Serial.println("Mode scanning I2C."); scanI2C(); cmd=' '; }
+        else if (cmd=='s') { Serial.println("Mode save config."); jeedom.saveConfigurationJeedom(); cmd=' ';}
         else if (cmd=='p') { Serial.println("Mode Pause"); }
-        else if (cmd=='j') { Serial.println("Mode jeeDom active."); }
         else if (cmd=='v') { showMeteo(); cmd = ' ';}
         else { Serial.printf("Stop serial: %s \n\r",VERSION); }
       }
@@ -479,6 +495,7 @@ void loop() {
     cmd='P';
     return;
   }
+  #endif
 
   // Is alive executed every 1 sec.
   if ( millis() - previousMillis > 1000L) {
@@ -489,8 +506,8 @@ void loop() {
     int wifiStatus = WL_CONNECTED;
 
     if ( cmd=='d' ) {
-      Serial.printf("%s WS windDir=%s winSpd=%s(c:%lu) RainS=%s(c:%lu) \n\r", 
-       getDate().c_str(), uint2cptr(getWindDir()), getWindSensor(), windCounter, getRainSensor(), rainFlipFlop );
+      DBXMF("%s WS windDir=%s winSpd=%s(c:%lu) RainS=%s(c:%lu) \n\r", 
+            getDate().c_str(), uint2cptr(getWindDir()), getWindSensor(), windCounter, getRainSensor(), rainFlipFlop );
     }
 
     // Read every 120 seconds
@@ -500,19 +517,19 @@ void loop() {
       if ((wifiStatus != WL_CONNECTED) ) {
         wifiLost++;
         if (wifiLost == 2 ) {
-          Serial.printf("%s WiFi connection is lost. cnt:%d jeeErrCnt:%d\n\r",getDate().c_str(), wifiLost, jeedom.getErrorCounter());
+          DBXMF("%s WiFi connection is lost. cnt:%d jeeErrCnt:%d\n\r",getDate().c_str(), wifiLost, jeedom.getErrorCounter());
           saveConfigJeedom = true;
         }
         if (wifiLost == 4) {
           if (WiFi.reconnect()) {
-            Serial.printf("%s WiFi reconnect OK (%d). \n\r",getDate().c_str(), wifiLost);
+            DBXMF("%s WiFi reconnect OK (%d). \n\r",getDate().c_str(), wifiLost);
             wifiLost = 0;
           }
         }
       } else {
         // Test if Jeedom is Connected
         if(  jeedom.getErrorCounter()!= 0 ) {
-          Serial.printf("%s WiFi correct but jeedom error jeeErrCnt:%d\n\r",getDate().c_str(), jeedom.getErrorCounter());
+          DBXMF("%s WiFi correct but jeedom error jeeErrCnt:%d\n\r",getDate().c_str(), jeedom.getErrorCounter());
         }
       }
 	  }
@@ -540,6 +557,7 @@ void loop() {
         SEND2JEEDOM("Rainmmm2", wifiStatus, jeedomStatus, idRmpm, rainIntensityMmxm2xh);
         SEND2JEEDOM("Rainxjour", wifiStatus, jeedomStatus, idRjou, rainIntensityMmxm2xj);
       }
+
     } // end 1 m
   } // End second
 }
