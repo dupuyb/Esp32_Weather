@@ -6,7 +6,7 @@
 #include <time.h>
 #include "Jeedom.h"
 
-const char VERSION[] = "Ver:1.2.21"; 
+const char VERSION[] = "1.2.25"; 
 
 #define MAC_ADDR {0x00,0x01,0x02,0x03,0x04,0x05}
 
@@ -33,8 +33,6 @@ const char HTTP_TBLRWN[] PROGMEM = "<tr> <td class=\"tg-lqy6\">%s</td><td class=
 #endif
 
 // I2c for Bmp280 I2C addr 0x76
-#define HOMEALTITUDE 455 //! must be adjusted with GPS
-#define OFFESTTMP -4.0 //! Offset for temerature despite removale of the 3.3V regulator
 #define BMP280_I2CADDR 0x76
 #define pinSDA  23
 #define pinSCL  22
@@ -56,7 +54,6 @@ const String windDir[8] = {"N","NE","E","SE","S","SO","O","NO"};
 // Wind speed V(m/s) = r * ((2*PI)/60) * N(rpm) = K * N(rpm)
 #define winRmm  50 // bucket center radius
 #define pinU9   12
-//! #define pinU10  13  not cabling
 
 // Rain counter 1 liter in weather = 127.323954473516 more than 1mm on 1m2
 #define rainRadus 50 // mm collector radius
@@ -246,7 +243,7 @@ float pressureSeaBMP = -1;
 bool getBMP280() {
   bool ret = false;
   if (BMP_is_OK) {
-    float t = bmp.readTemperature() + OFFESTTMP;
+    float t = bmp.readTemperature() + jeedom.config.tempoffset;
     if ( temperatureBMP != t) {
       ret = true;
       temperatureBMP = t;
@@ -256,7 +253,7 @@ bool getBMP280() {
       ret = true;
       pressureBMP = p;
     }
-    float c = 0.0065*HOMEALTITUDE;
+    float c = 0.0065*jeedom.config.altitude;
     float a = 1.0-(c/(temperatureBMP+c+273.15));
     float b = pressureBMP * pow(a,-5.257);
     // bmp.readAltitude(SEALEVELPRESSURE_HPA);
@@ -306,40 +303,59 @@ char* getDebug(){
 }
 
 // Sent meteo.html to client ###########################
+String httpsnp;
 String sentHtmlMeteo() {
-  char fmt[256];
-  String msg = FPSTR(HTTP_HEADAL);
-  msg += FPSTR(HTTP_STYLWE);
+  char fmt[255];
+  httpsnp.clear();
+  httpsnp = FPSTR(HTTP_HEADAL);
+  httpsnp += FPSTR(HTTP_STYLWE);
   // Add message date & time
-  snprintf(fmt, 255, (const char*)F(HTTP_WEATHE), getDate().c_str());
-  msg += fmt; 
-  // table header
-  msg += FPSTR(HTTP_TBL1WE);
-  // Capteur BPM180
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 5, "<b>BPM280</b>", "Temp&eacute;rature", float2cptr(temperatureBMP), "&deg;C", "Degr&eacute; Celsius"); msg += fmt; 
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Humidit&eacute;", float2cptr(humidityBMP), "%", "");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureBMP), "hPa", "Pression atmosph&eacute;rique");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Altitude", float2cptr(HOMEALTITUDE), "m", "Detecteur");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureSeaBMP), "hPa", "Au niveau de la mer");msg += fmt;
-  // Anémomètre
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 6, "<b>An&eacute;mom&egrave;tre</b>", "Vent", float2cptr(windMeterPerSec), "m.sec.", "");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Vent", float2cptr(getWindKmPerHour()), "km.h", "");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", float2cptr(windNrbRpm), "r.p.m", "Rotation par minute");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", long2cptr(windCounter), "pulses", "Nombre de tour total");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Direction", uint2cptr(getWindDir()), "binaire", "Bit(7...0): NO,O,SO,S,SE,E,NE,N");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Girouette", getRoseDesVents().c_str(), "", "<pre style=\"font-size: 10px\">rose des vents\n    N\n NO /\\ NE\n O <  > E\n SO \\/ SE\n    S</pre>");msg += fmt;
-  // Pluviometre
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 3, "<b>Pluviom&egrave;tre</b>", "Pluie", float2cptr(rainIntensityMmxm2xh), "mm.m<sup>2</sup>.h", "Simulation par minute");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pluie", float2cptr(rainIntensityMmxm2xj), "mm.m<sup>2</sup>.j", "Millim&egrave;tre par jour");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "FlipFlop", long2cptr(rainFlipFlop), "pulses", "Nombre de bascule");msg += fmt;
-  // ESP32
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 4, "<b>ESP32</b>", "Version", VERSION, "Reboot", rebootTime.c_str());msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "UTC", long2cptr(xTaskGetTickCountFromISR()), "ms", getDebug());msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "MAC", WiFi.macAddress().c_str(), "", "MAC Adresse");msg += fmt;
-  snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "IP", WiFi.localIP().toString().c_str(), " FreeH:", long2cptr(ESP.getFreeHeap())); msg += fmt;
+  snprintf(fmt, 255, (const char*)F(HTTP_WEATHE), getDate().c_str()); httpsnp += fmt; 
+  // get if action
+  String srvcmd = server.arg("cmd");
+  String srvval = server.arg("value");
+  if (srvcmd!="") {
+    if (srvcmd=="tempoffset") { //  http://192.168.1.24/meteo?cmd=tempoffset&value=-5.0
+     float tempoffset = srvval.toFloat();
+     jeedom.config.tempoffset = tempoffset;
+     snprintf(fmt, 255, "<hr/><p>parameter:%s<br>valeur:%f</p><hr/>",srvcmd.c_str(), tempoffset); httpsnp += fmt;
+    }
+    if (srvcmd=="altitude") { //  http://192.168.1.24/meteo?cmd=altitude&value=-455.0
+     float altitude = srvval.toFloat();
+     jeedom.config.altitude = altitude;
+     snprintf(fmt, 255, "<hr/><p>parameter:%s<br>valeur:%f</p><hr/>",srvcmd.c_str(), altitude); httpsnp += fmt;
+    }
+    jeedom.saveConfigurationJeedom();
+  } else {
+    // table header
+    httpsnp += FPSTR(HTTP_TBL1WE);
+    // Capteur BPM180
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 6, "<b>BPM280</b>", "Temp&eacute;rature", float2cptr(temperatureBMP), "&deg;C", "Degr&eacute; Celsius"); httpsnp += fmt; 
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Humidit&eacute;", float2cptr(humidityBMP), "%", "");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureBMP), "hPa", "Pression atmosph&eacute;rique");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Offset", float2cptr(jeedom.config.tempoffset), "&deg;C", "Detecteur");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Altitude", float2cptr(jeedom.config.altitude), "m", "Detecteur");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureSeaBMP), "hPa", "Au niveau de la mer");httpsnp += fmt;
+    // Anémomètre
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 6, "<b>An&eacute;mom&egrave;tre</b>", "Vent", float2cptr(windMeterPerSec), "m.sec.", "");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Vent", float2cptr(getWindKmPerHour()), "km.h", "");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", float2cptr(windNrbRpm), "r.p.m", "Rotation par minute");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", long2cptr(windCounter), "pulses", "Nombre de tour total");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Direction", uint2cptr(getWindDir()), "binaire", "Bit(7...0): NO,O,SO,S,SE,E,NE,N");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Girouette", getRoseDesVents().c_str(), "", "<pre style=\"font-size: 10px\">rose des vents\n    N\n NO /\\ NE\n O <  > E\n SO \\/ SE\n    S</pre>");httpsnp += fmt;
+    // Pluviometre
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 3, "<b>Pluviom&egrave;tre</b>", "Pluie", float2cptr(rainIntensityMmxm2xh), "mm.m<sup>2</sup>.h", "Simulation par minute");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pluie", float2cptr(rainIntensityMmxm2xj), "mm.m<sup>2</sup>.j", "Millim&egrave;tre par jour");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "FlipFlop", long2cptr(rainFlipFlop), "pulses", "Nombre de bascule");httpsnp += fmt;
+    // ESP32
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 4, "<b>ESP32</b>", "Version", VERSION, "Reboot", rebootTime.c_str());httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "UTC", long2cptr(xTaskGetTickCountFromISR()), "ms", getDebug());httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "MAC", WiFi.macAddress().c_str(), "", "MAC Adresse");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "IP", WiFi.localIP().toString().c_str(), " FreeH:", long2cptr(ESP.getFreeHeap())); httpsnp += fmt;
+  }  
   // Fin fichier
-  msg += ("</table></div></body></html>");
-  return msg;
+  httpsnp += ("</table></div></body></html>");
+  return httpsnp;
 }
 
 #ifdef DEBUG_WEATHER
@@ -437,7 +453,7 @@ void setup() {
   // Start jeedom_ok
   jeedom.setup();
   // Append meteo html 
-  server.on("/meteo.html", [](){
+  server.on("/meteo", [](){
     server.send(HTTP_CODE_OK, "text/html", sentHtmlMeteo());
   });
 	// Init time
@@ -548,7 +564,7 @@ void loop() {
         SEND2JEEDOM("Humidity", wifiStatus, jeedomStatus, idHumi, humidityBMP);
         SEND2JEEDOM("Pression", wifiStatus, jeedomStatus, idBaro, pressureBMP);
         SEND2JEEDOM("PressionSea", wifiStatus, jeedomStatus, idBars, pressureSeaBMP);
-        SEND2JEEDOM("Altidute", wifiStatus, jeedomStatus, idAlti, HOMEALTITUDE);
+        SEND2JEEDOM("Altidute", wifiStatus, jeedomStatus, idAlti, jeedom.config.altitude);
      
         SEND2JEEDOM("Windms", wifiStatus, jeedomStatus, idWmps, windMeterPerSec);
         SEND2JEEDOM("Windkmh", wifiStatus, jeedomStatus, idWkph, getWindKmPerHour());

@@ -8,6 +8,8 @@ struct ConfigJeedom {
   char  host[20];
   int   port;
   char  apiKey[40];
+  float tempoffset;
+  float altitude;
 };
 
 class Jeedom {
@@ -28,6 +30,8 @@ public:
     rootcfg["host"] = config.host;
     rootcfg["port"] = config.port;
     rootcfg["apiKey"] = config.apiKey;
+    rootcfg["tempoffset"] = config.tempoffset;
+    rootcfg["altitude"] = config.altitude;
     // ArduinoJson 6
     serializeJson(rootcfg, cfJeedomjson);
     file.print(cfJeedomjson);
@@ -51,7 +55,9 @@ public:
       strlcpy(config.host, rootcfg["host"] | "192.168.1.117", sizeof(config.host));
       config.port = rootcfg["port"] | 80;
       strlcpy(config.apiKey, rootcfg["apiKey"] | "unknown", sizeof(config.apiKey));
-      if (error /*!rootcfg.success()*/) saveConfigurationJeedom();
+      config.tempoffset = rootcfg["tempoffset"] | -5.0; 
+      config.altitude = rootcfg["altitude"] | 455.0; 
+      if (error)  saveConfigurationJeedom();
     }
     ccrConfig = getCcrConfig();
   }
