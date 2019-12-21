@@ -418,7 +418,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 	}
 }
 
-// I2C csanning address
+// I2C scanning address
 void scanI2C() {
   DBXMF("Start Scanning I2C Addresses pinSDA:%d pinSCL:%d\n\r",pinSDA,pinSCL);
   uint8_t cnt=0;
@@ -433,7 +433,7 @@ void scanI2C() {
     }
     else DBXM("..");
     DBXM(' ');
-    if ((i&0x0f) == 0x0f) DBXLN();
+    if ((i&0x0f) == 0x0f) DBXMLN("");
   }
   DBXM("Scan Completed, ");
   DBXM(cnt);
