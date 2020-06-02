@@ -32,6 +32,7 @@ const char HTTP_TBLRWN[] PROGMEM = "<tr> <td class=\"tg-lqy6\">%s</td><td class=
   #define DBXMLN(...)
 #endif
 
+//! MUST BE ADAPTED TO BME680
 // I2c for Bmp280 I2C addr 0x76
 #define BMP280_I2CADDR 0x76
 #define pinSDA  23
@@ -68,8 +69,8 @@ int8_t cmd;
 int8_t wifiLost = 0;
 
 // Time facilities
-const long gmtOffset_sec     = 3600;
-const int daylightOffset_sec = 3600;
+const long gmtOffset_sec     = 3600; // For UTC +1.00 : 1 * 60 * 60 : 3600
+const int daylightOffset_sec = 3600; // Use daylight savings time (3600 or 0)
 struct tm timeinfo;            // time struct
 const char* ntpServer        = "pool.ntp.org";
 
