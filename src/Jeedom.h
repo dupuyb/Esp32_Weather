@@ -10,6 +10,7 @@ struct ConfigJeedom {
   char  apiKey[40];
   float tempoffset;
   float altitude;
+  int   diroffset;
 };
 
 class Jeedom {
@@ -32,6 +33,7 @@ public:
     rootcfg["apiKey"] = config.apiKey;
     rootcfg["tempoffset"] = config.tempoffset;
     rootcfg["altitude"] = config.altitude;
+    rootcfg["diroffset"] = config.diroffset;
     // ArduinoJson 6
     serializeJson(rootcfg, cfJeedomjson);
     file.print(cfJeedomjson);
@@ -57,6 +59,7 @@ public:
       strlcpy(config.apiKey, rootcfg["apiKey"] | "unknown", sizeof(config.apiKey));
       config.tempoffset = rootcfg["tempoffset"] | -5.0; 
       config.altitude = rootcfg["altitude"] | 455.0; 
+      config.diroffset = rootcfg["diroffset"] | 0;
       if (error)  saveConfigurationJeedom();
     }
     ccrConfig = getCcrConfig();

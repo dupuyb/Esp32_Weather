@@ -1,16 +1,19 @@
 // #define DEBUG_FRAME
-#include "Frame.h"
+// Frame wifi
+#include "FrameWeb.h"
+FrameWeb frame;
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <time.h>
 #include "Jeedom.h"
 
-const char VERSION[] = "1.2.25"; 
+const char VERSION[] = "1.3.6"; 
 
 #define MAC_ADDR {0x00,0x01,0x02,0x03,0x04,0x05}
 
 // Embbedded weather page
+const char HTTP_HEADAL[] PROGMEM = "<!DOCTYPE html><html><head><title>HTML ESP32 Dudu</title><meta content='width=device-width' name='viewport'></head>";
 const char HTTP_HEADWE[] PROGMEM = "<!DOCTYPE html><html><head><title>Station&nbsp;M&eacute;t&eacute;o</title></head><body bgcolor=#DEB887>";
 const char HTTP_STYLWE[] PROGMEM = "<style type=\"text/css\">.tg  {border-collapse:collapse;border-spacing:0;border-color:#93a1a1;}.tg td{font-family:Arial, sans-serif;font-size:14px;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;border-color:#93a1a1;color:#002b36;background-color:#fdf6e3;}.tg th{font-family:Arial, sans-serif;font-size:14px;font-weight:normal;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;border-color:#93a1a1;color:#fdf6e3;background-color:#657b83;}.tg .tg-lqy6{text-align:right;vertical-align:top}.tg .tg-amwm{font-weight:bold;text-align:center;vertical-align:top}.tg .tg-0lax{text-align:left;vertical-align:top}</style>";
 
@@ -120,20 +123,6 @@ bool onChanged = true;
     } \
   }
 
-// Force other host name and mac Addresses  // Set config or defaults
-void forceMac() {
-  strlcpy(config.HostName, "esp32weather",sizeof(config.HostName));
-  byte new_mac[8] = MAC_ADDR;
-  for (int i=0; i<6; i++)
-    config.MacAddress[i] = new_mac[i];
-  config.ResetWifi = false;
-  strlcpy(config.LoginName, "admin",sizeof(config.LoginName));
-  strlcpy(config.LoginPassword, "admin",sizeof(config.LoginPassword));
-  config.UseToolsLocal = true;
-  String ret = saveConfiguration(filename, config);
-  DBXMLN(ret);
-}
-
 // Read wind Direction 11110111 SUD
 uint8_t getWindDir(){
   uint8_t dir = 0;
@@ -141,13 +130,22 @@ uint8_t getWindDir(){
     dir += ( (1<<i) * digitalRead(pinWindDir[i]));
   return dir;
 }
-int getWindDirFirst(){
-  for (int i=0; i<8; i++)
-    if ( digitalRead(pinWindDir[i]) == LOW ) return i;
-  return 0;
+unsigned long getWindDirDegree() {
+  int deg = 0;
+  // 0 to 360° in 8 step 0,45,90,135,180, 225, 270, 315, 
+  for (int i=0, j=0; i<8; i++, j+=45) {
+    if ( digitalRead(pinWindDir[i]) == LOW ) {
+      deg = (j+jeedom.config.diroffset) % 360;
+      break;
+    }
+  }
+  return deg;
 }
 String getRoseDesVents() {
-  return windDir[getWindDirFirst()];
+  int deg = getWindDirDegree() / 45;
+  if (deg<0)deg=0;
+  if (deg>7)deg=7;
+  return windDir[deg];
 }
 
 // Read wind speed  U10 is not installed (else double irq)
@@ -313,15 +311,20 @@ String sentHtmlMeteo() {
   // Add message date & time
   snprintf(fmt, 255, (const char*)F(HTTP_WEATHE), getDate().c_str()); httpsnp += fmt; 
   // get if action
-  String srvcmd = server.arg("cmd");
-  String srvval = server.arg("value");
+  String srvcmd = frame.server.arg("cmd");
+  String srvval = frame.server.arg("value");
   if (srvcmd!="") {
-    if (srvcmd=="tempoffset") { //  http://192.168.1.24/meteo?cmd=tempoffset&value=-5.0
+    if (srvcmd=="tempoffset") { //  http://192.168.3.20/meteo?cmd=tempoffset&value=-5.0
      float tempoffset = srvval.toFloat();
      jeedom.config.tempoffset = tempoffset;
      snprintf(fmt, 255, "<hr/><p>parameter:%s<br>valeur:%f</p><hr/>",srvcmd.c_str(), tempoffset); httpsnp += fmt;
     }
-    if (srvcmd=="altitude") { //  http://192.168.1.24/meteo?cmd=altitude&value=-455.0
+    if (srvcmd=="diroffset") { //  http://192.168.3.20/meteo?cmd=diroffset&value=90
+     int diroffset = srvval.toInt();
+     jeedom.config.diroffset = diroffset;
+     snprintf(fmt, 255, "<hr/><p>parameter:%s<br>valeur:%d</p><hr/>",srvcmd.c_str(), diroffset); httpsnp += fmt;
+    }
+    if (srvcmd=="altitude") { //  http://192.168.3.20/meteo?cmd=altitude&value=-455.0
      float altitude = srvval.toFloat();
      jeedom.config.altitude = altitude;
      snprintf(fmt, 255, "<hr/><p>parameter:%s<br>valeur:%f</p><hr/>",srvcmd.c_str(), altitude); httpsnp += fmt;
@@ -338,12 +341,15 @@ String sentHtmlMeteo() {
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Altitude", float2cptr(jeedom.config.altitude), "m", "Detecteur");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pression", float2cptr(pressureSeaBMP), "hPa", "Au niveau de la mer");httpsnp += fmt;
     // Anémomètre
-    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 6, "<b>An&eacute;mom&egrave;tre</b>", "Vent", float2cptr(windMeterPerSec), "m.sec.", "");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 8, "<b>An&eacute;mom&egrave;tre</b>", "Vent", float2cptr(windMeterPerSec), "m.sec.", "");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Vent", float2cptr(getWindKmPerHour()), "km.h", "");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", float2cptr(windNrbRpm), "r.p.m", "Rotation par minute");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rotation", long2cptr(windCounter), "pulses", "Nombre de tour total");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Offset", float2cptr(jeedom.config.diroffset), "&deg;Angle", "Direction compensation");httpsnp += fmt;
+    snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Rosace", long2cptr(getWindDirDegree()), "degr&eacute;",  "Rosace des vents");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Direction", uint2cptr(getWindDir()), "binaire", "Bit(7...0): NO,O,SO,S,SE,E,NE,N");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Girouette", getRoseDesVents().c_str(), "", "<pre style=\"font-size: 10px\">rose des vents\n    N\n NO /\\ NE\n O <  > E\n SO \\/ SE\n    S</pre>");httpsnp += fmt;
+
     // Pluviometre
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWS), 3, "<b>Pluviom&egrave;tre</b>", "Pluie", float2cptr(rainIntensityMmxm2xh), "mm.m<sup>2</sup>.h", "Simulation par minute");httpsnp += fmt;
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "Pluie", float2cptr(rainIntensityMmxm2xj), "mm.m<sup>2</sup>.j", "Millim&egrave;tre par jour");httpsnp += fmt;
@@ -390,10 +396,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 			break;
 		case WStype_CONNECTED:
     {
-      IPAddress ip = webSocket.remoteIP(num);
+      IPAddress ip = frame.webSocket.remoteIP(num);
       DBXMLN("[%u] Connected from %d.%d.%d.%d url: [%s]", num, ip[0], ip[1], ip[2], ip[3], payload);
     	String ReponseHTML = String(value);
-	    webSocket.sendTXT(num, ReponseHTML);
+	    frame.webSocket.sendTXT(num, ReponseHTML);
     }
 		break;
 		case WStype_TEXT:
@@ -403,7 +409,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
       if (payload[0] == '#')
           value = (uint32_t) strtol((const char *) &payload[1], NULL, 16);   // decode sendValue
       String ReponseHTML = String(value);
-      webSocket.sendTXT(num, ReponseHTML);
+      frame.webSocket.sendTXT(num, ReponseHTML);
     }
     break;
 		case WStype_BIN:
@@ -450,13 +456,14 @@ void setup() {
   pinMode(EspLedBlue, OUTPUT);     // Led is BLUE at statup
   digitalWrite(EspLedBlue, HIGH);  // After 5 seconds blinking indicate WiFI ids OK
   // Start framework
-  frame_setup();
+  frame.setup();
   // Start jeedom_ok
   jeedom.setup();
   // Append meteo html 
-  server.on("/meteo", [](){
-    server.send(HTTP_CODE_OK, "text/html", sentHtmlMeteo());
+  frame.server.on("/meteo", [](){
+    frame.server.send(HTTP_CODE_OK, "text/html", sentHtmlMeteo());
   });
+  frame.externalHtmlTools="Specific home page is visible at :<a class='button' href='/meteo'>Meteo Page</a>";
 	// Init time
 	configTime(gmtOffset_sec, daylightOffset_sec, ntpServer); //init and get the time
   wifiLost = 0;
@@ -478,12 +485,16 @@ void setup() {
   initRainCounter();
 }
 
+// Frame option
+void saveConfigCallback() {}
+void configModeCallback (WiFiManager *myWiFiManager) {}
+
 // Main loop -----------------------------------------------------------------
 bool fbmp = false; bool fwind = false; bool frain = false;
 void loop() {
 
   // Call frame loop
-  frame_loop();
+  frame.loop();
 
 #ifdef DEBUG_WEATHER
   // Get Serial commands
@@ -493,11 +504,10 @@ void loop() {
       cmd = c;
     } else {
       if (c==13) {
-        if (cmd=='h') { Serial.println(); Serial.println("- Help info:\n\r r=reboot i=myip d=debug m=MAC s=saveConfig S=ScanI2C p=pause v=verbose");}
+        if (cmd=='h') { Serial.println(); Serial.println("- Help info:\n\r r=reboot i=myip d=debug s=saveConfig S=ScanI2C p=pause v=verbose");}
 			  else if (cmd=='r') { ESP.restart(); }
         else if (cmd=='i') { Serial.printf("Heap:%u IP:%s MAC:%s \n\r",ESP.getFreeHeap(), WiFi.localIP().toString().c_str() , WiFi.macAddress().c_str()); }
         else if (cmd=='d') { Serial.println("Mode debug active."); }
-        else if (cmd=='m') { Serial.println("Mode config feilds (Mac, Host,...)."); forceMac(); cmd=' ';}
         else if (cmd=='S') { Serial.println("Mode scanning I2C."); scanI2C(); cmd=' '; }
         else if (cmd=='s') { Serial.println("Mode save config."); jeedom.saveConfigurationJeedom(); cmd=' ';}
         else if (cmd=='p') { Serial.println("Mode Pause"); }
@@ -569,7 +579,7 @@ void loop() {
      
         SEND2JEEDOM("Windms", wifiStatus, jeedomStatus, idWmps, windMeterPerSec);
         SEND2JEEDOM("Windkmh", wifiStatus, jeedomStatus, idWkph, getWindKmPerHour());
-        SEND2JEEDOM("Winddir", wifiStatus, jeedomStatus, idWdir, getWindDirFirst());
+        SEND2JEEDOM("Winddir", wifiStatus, jeedomStatus, idWdir, getWindDirDegree());
  
         SEND2JEEDOM("Rainmmm2", wifiStatus, jeedomStatus, idRmpm, rainIntensityMmxm2xh);
         SEND2JEEDOM("Rainxjour", wifiStatus, jeedomStatus, idRjou, rainIntensityMmxm2xj);
