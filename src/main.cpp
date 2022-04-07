@@ -8,13 +8,13 @@ FrameWeb frame;
 #include <time.h>
 #include "Jeedom.h"
 
-const char VERSION[] = "1.3.6"; 
+const char VERSION[] = "1.4.4";
 
 #define MAC_ADDR {0x00,0x01,0x02,0x03,0x04,0x05}
 
 // Embbedded weather page
-const char HTTP_HEADAL[] PROGMEM = "<!DOCTYPE html><html><head><title>HTML ESP32 Dudu</title><meta content='width=device-width' name='viewport'></head>";
-const char HTTP_HEADWE[] PROGMEM = "<!DOCTYPE html><html><head><title>Station&nbsp;M&eacute;t&eacute;o</title></head><body bgcolor=#DEB887>";
+const char HTTP_HEADAL[] PROGMEM = "<!DOCTYPE html><html><head><title>HTML ESP32 Dudu</title><meta content='width=device-width' name='viewport'></head><center>";
+const char HTTP_HEADWE[] PROGMEM = "<!DOCTYPE html><html><head><title>Station&nbsp;M&eacute;t&eacute;o</title></head><body bgcolor=#DEB887><center>";
 const char HTTP_STYLWE[] PROGMEM = "<style type=\"text/css\">.tg  {border-collapse:collapse;border-spacing:0;border-color:#93a1a1;}.tg td{font-family:Arial, sans-serif;font-size:14px;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;border-color:#93a1a1;color:#002b36;background-color:#fdf6e3;}.tg th{font-family:Arial, sans-serif;font-size:14px;font-weight:normal;padding:10px 5px;border-style:solid;border-width:1px;overflow:hidden;word-break:normal;border-color:#93a1a1;color:#fdf6e3;background-color:#657b83;}.tg .tg-lqy6{text-align:right;vertical-align:top}.tg .tg-amwm{font-weight:bold;text-align:center;vertical-align:top}.tg .tg-0lax{text-align:left;vertical-align:top}</style>";
 
 const char HTTP_WEATHE[] PROGMEM =  "<h1 style=\"text-align: center;\">Station M&eacute;t&eacute;o</h1><p>La derni&eacute;re acquisition a &eacute;t&eacute; effectu&eacute;e le %s.</p>";
@@ -100,6 +100,7 @@ long previousMillis = 0;
 // Jeedom
 Jeedom jeedom("/cfJeedom.json");
 bool saveConfigJeedom = false;
+/*
 // Devices from virtual jeedom
 const int idTemp = 1925; // Température
 const int idHumi = 1926; // % humidity
@@ -111,6 +112,7 @@ const int idWkph = 1938; // Wind km/h
 const int idRmpm = 1939; // Rain mm/m2/h 
 const int idRjou = 1940; // Rain intensity per jpour
 const int idWdir = 1941; // Wind direction
+*/
 
 bool onChanged = true;
 
@@ -361,7 +363,7 @@ String sentHtmlMeteo() {
     snprintf(fmt, 255,(const char*)F(HTTP_TBLRWN), "IP", WiFi.localIP().toString().c_str(), " FreeH:", long2cptr(ESP.getFreeHeap())); httpsnp += fmt;
   }  
   // Fin fichier
-  httpsnp += ("</table></div></body></html>");
+  httpsnp += ("</table></div></center></body></html>");
   return httpsnp;
 }
 
@@ -571,18 +573,18 @@ void loop() {
 
       // Send meteo to Jeedom
       if (fbmp || fwind || frain) {
-        SEND2JEEDOM("Temperatuure", wifiStatus, jeedomStatus, idTemp, temperatureBMP);
-        SEND2JEEDOM("Humidity", wifiStatus, jeedomStatus, idHumi, humidityBMP);
-        SEND2JEEDOM("Pression", wifiStatus, jeedomStatus, idBaro, pressureBMP);
-        SEND2JEEDOM("PressionSea", wifiStatus, jeedomStatus, idBars, pressureSeaBMP);
-        SEND2JEEDOM("Altidute", wifiStatus, jeedomStatus, idAlti, jeedom.config.altitude);
+        SEND2JEEDOM("Temperatuure", wifiStatus, jeedomStatus, jeedom.config.idTemp, temperatureBMP);
+        SEND2JEEDOM("Humidity", wifiStatus, jeedomStatus, jeedom.config.idHumi, humidityBMP);
+        SEND2JEEDOM("Pression", wifiStatus, jeedomStatus, jeedom.config.idBaro, pressureBMP);
+        SEND2JEEDOM("PressionSea", wifiStatus, jeedomStatus, jeedom.config.idBars, pressureSeaBMP);
+        SEND2JEEDOM("Altidute", wifiStatus, jeedomStatus, jeedom.config.idAlti, jeedom.config.altitude);
      
-        SEND2JEEDOM("Windms", wifiStatus, jeedomStatus, idWmps, windMeterPerSec);
-        SEND2JEEDOM("Windkmh", wifiStatus, jeedomStatus, idWkph, getWindKmPerHour());
-        SEND2JEEDOM("Winddir", wifiStatus, jeedomStatus, idWdir, getWindDirDegree());
+        SEND2JEEDOM("Windms", wifiStatus, jeedomStatus, jeedom.config.idWmps, windMeterPerSec);
+        SEND2JEEDOM("Windkmh", wifiStatus, jeedomStatus, jeedom.config.idWkph, getWindKmPerHour());
+        SEND2JEEDOM("Winddir", wifiStatus, jeedomStatus, jeedom.config.idWdir, getWindDirDegree());
  
-        SEND2JEEDOM("Rainmmm2", wifiStatus, jeedomStatus, idRmpm, rainIntensityMmxm2xh);
-        SEND2JEEDOM("Rainxjour", wifiStatus, jeedomStatus, idRjou, rainIntensityMmxm2xj);
+        SEND2JEEDOM("Rainmmm2", wifiStatus, jeedomStatus, jeedom.config.idRmpm, rainIntensityMmxm2xh);
+        SEND2JEEDOM("Rainxjour", wifiStatus, jeedomStatus, jeedom.config.idRjou, rainIntensityMmxm2xj);
       }
 
     } // end 1 m

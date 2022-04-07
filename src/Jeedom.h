@@ -11,6 +11,16 @@ struct ConfigJeedom {
   float tempoffset;
   float altitude;
   int   diroffset;
+  int idTemp; // 1925; // Température
+  int idHumi; // 1926; // % humidity
+  int idBaro; // 1927; // Pression barometric
+  int idBars; // 1935; // Pression barometric
+  int idAlti; // 1936; // Altidute
+  int idWmps; // 1937; // Wind m/s
+  int idWkph; // 1938; // Wind km/h
+  int idRmpm; // 1939; // Rain mm/m2/h 
+  int idRjou; // 1940; // Rain intensity per jpour
+  int idWdir; // 1941; // Wind direction
 };
 
 class Jeedom {
@@ -27,13 +37,23 @@ public:
     }
     String cfJeedomjson;
     // ArduinoJson 6
-    DynamicJsonDocument rootcfg(500);
+    DynamicJsonDocument rootcfg(1024);
     rootcfg["host"] = config.host;
     rootcfg["port"] = config.port;
     rootcfg["apiKey"] = config.apiKey;
     rootcfg["tempoffset"] = config.tempoffset;
     rootcfg["altitude"] = config.altitude;
     rootcfg["diroffset"] = config.diroffset;
+    rootcfg["idTemp"] = config.idTemp;
+    rootcfg["idHumi"] = config.idHumi;
+    rootcfg["idBaro"] = config.idBaro;
+    rootcfg["idBars"] = config.idBars;
+    rootcfg["idAlti"] = config.idAlti;
+    rootcfg["idWmps"] = config.idWmps;
+    rootcfg["idWkph"] = config.idWkph;
+    rootcfg["idRmpm"] = config.idRmpm;
+    rootcfg["idRjou"] = config.idRjou;
+    rootcfg["idWdir"] = config.idWdir;
     // ArduinoJson 6
     serializeJson(rootcfg, cfJeedomjson);
     file.print(cfJeedomjson);
@@ -60,6 +80,16 @@ public:
       config.tempoffset = rootcfg["tempoffset"] | -5.0; 
       config.altitude = rootcfg["altitude"] | 455.0; 
       config.diroffset = rootcfg["diroffset"] | 0;
+      config.idTemp = rootcfg["idTemp"] | 1925; // Température
+      config.idHumi = rootcfg["idHumi"] | 1926; // % humidity
+      config.idBaro = rootcfg["idBaro"] | 1927; // Pression barometric
+      config.idBars = rootcfg["idBars"] | 1935; // Pression barometric
+      config.idAlti = rootcfg["idAlti"] | 1936; // Altidute
+      config.idWmps = rootcfg["idWmps"] | 1937; // Wind m/s
+      config.idWkph = rootcfg["idWkph"] | 1938; // Wind km/h
+      config.idRmpm = rootcfg["idRmpm"] | 1939; // Rain mm/m2/h 
+      config.idRjou = rootcfg["idRjou"] | 1940; // Rain intensity per jpour
+      config.idWdir = rootcfg["idWdir"] | 1941; // Wind direction
       if (error)  saveConfigurationJeedom();
     }
     ccrConfig = getCcrConfig();
@@ -74,7 +104,7 @@ public:
     loadConfigurationJeedom();
     virtualbaseurl = "/core/api/jeeApi.php?apikey=";
     virtualbaseurl += config.apiKey;
-    virtualbaseurl += "&type=virtual&id=";
+    virtualbaseurl += "&type=event&plugin=virtual&id=";
   }
 
   int sendVirtual(int id, float val) {
